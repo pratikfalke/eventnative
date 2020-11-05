@@ -128,6 +128,16 @@ func testConnection(config *storages.DestinationConfig) error {
 			}
 		}
 		return nil
+	case storages.S3Type:
+		if err := config.S3.Validate(); err != nil {
+			return err
+		}
+		s3, err := adapters.NewS3(config.S3)
+		if err != nil {
+			return err
+		}
+		defer s3.Close()
+		return nil
 	default:
 		return errors.New("unsupported destination type " + config.Type)
 	}
