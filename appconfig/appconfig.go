@@ -30,6 +30,7 @@ func setDefaultParams() {
 	viper.SetDefault("server.port", "8001")
 	viper.SetDefault("server.static_files_dir", "./web")
 	viper.SetDefault("server.auth_reload_sec", 30)
+	viper.SetDefault("server.sources_reload_sec", 30)
 	viper.SetDefault("server.destinations_reload_sec", 40)
 	viper.SetDefault("server.sync_tasks.pool.size", 500)
 	viper.SetDefault("server.disable_version_reminder", false)

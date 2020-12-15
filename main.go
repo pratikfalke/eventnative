@@ -225,6 +225,7 @@ func main() {
 
 	//sources config
 	sourcesViper := viper.Sub(sourcesKey)
+	sourcesSrc := viper.GetString(sourcesKey)
 
 	//override with config from os env
 	sourcesJsonConfig := viper.GetString("sources_json")
@@ -235,6 +236,7 @@ func main() {
 			logging.Error("Error reading/parsing json config from SOURCES_JSON", err)
 		} else {
 			sourcesViper = envJsonViper.Sub(sourcesKey)
+			sourcesSrc = envJsonViper.GetString(sourcesKey)
 		}
 	}
 
@@ -242,7 +244,7 @@ func main() {
 	poolSize := viper.GetInt("server.sync_tasks.pool.size")
 
 	//Create sources
-	sourceService, err := sources.NewService(ctx, sourcesViper, destinationsService, metaStorage, syncService, poolSize)
+	sourceService, err := sources.NewService(ctx, sourcesViper, sourcesSrc, destinationsService, metaStorage, syncService, poolSize)
 	if err != nil {
 		logging.Fatal(err)
 	}

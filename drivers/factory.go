@@ -54,7 +54,7 @@ func Create(ctx context.Context, name string, sourceConfig *SourceConfig) (map[s
 		switch collection.(type) {
 		case string:
 			collections = append(collections, &Collection{Name: collection.(string), Type: collection.(string)})
-		case map[interface{}]interface{}:
+		case map[interface{}]interface{}, map[string]interface{}:
 			collectionConfigMap := cast.ToStringMap(collection)
 			collectionName := getStringParameter(collectionConfigMap, collectionNameField)
 			if collectionName == "" {

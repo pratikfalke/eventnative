@@ -11,21 +11,23 @@ import (
 	"github.com/jitsucom/eventnative/logging"
 	"github.com/jitsucom/eventnative/meta"
 	"github.com/jitsucom/eventnative/metrics"
+	"github.com/jitsucom/eventnative/resources"
 	"github.com/jitsucom/eventnative/safego"
 	"github.com/jitsucom/eventnative/storages"
 	"github.com/panjf2000/ants/v2"
 	"github.com/spf13/viper"
 	"io"
+	"strings"
 	"sync"
 	"time"
 )
 
-const marshallingErrorMsg = `Error initializing source: wrong config format: each source must contains one key and config as a value(see https://docs.eventnative.dev/configuration) e.g. 
-sources:  
-  custom_name:
-    type: google_play
-    ...
-`
+const (
+	marshallingErrorMsg              = `Error initializing source (see documentation: https://docs.eventnative.dev/configuration ): `
+	serviceName                      = "sources"
+	unknownSourceConfigurationFormat = "unknown format of sources configuration. Expected map, " +
+		"json string representation or string starting with file:// or http(s)://"
+)
 
 type Service struct {
 	io.Closer
@@ -47,7 +49,7 @@ func NewTestService() *Service {
 	return &Service{}
 }
 
-func NewService(ctx context.Context, sources *viper.Viper, destinationsService *destinations.Service,
+func NewService(ctx context.Context, sources *viper.Viper, sourcesProvider string, destinationsService *destinations.Service,
 	metaStorage meta.Storage, monitorKeeper storages.MonitorKeeper, poolSize int) (*Service, error) {
 
 	service := &Service{
@@ -59,7 +61,7 @@ func NewService(ctx context.Context, sources *viper.Viper, destinationsService *
 		monitorKeeper:       monitorKeeper,
 	}
 
-	if sources == nil {
+	if sources == nil && sourcesProvider == "" {
 		logging.Warnf("Sources aren't configured")
 		return service, nil
 	}
@@ -74,14 +76,17 @@ func NewService(ctx context.Context, sources *viper.Viper, destinationsService *
 	}
 	service.pool = pool
 	defer service.startMonitoring()
-
-	sc := map[string]drivers.SourceConfig{}
-	if err := sources.Unmarshal(&sc); err != nil {
-		logging.Error(marshallingErrorMsg, err)
-		return service, nil
+	if sources != nil {
+		sourceConfigs := make(map[string]drivers.SourceConfig)
+		if err := sources.Unmarshal(&sourceConfigs); err != nil {
+			return nil, err
+		}
+		service.initDrivers(sourceConfigs)
+	} else {
+		if err := service.loadSources(sourcesProvider); err != nil {
+			return nil, err
+		}
 	}
-
-	service.init(sc)
 
 	if len(service.sources) == 0 {
 		logging.Errorf("Sources are empty")
@@ -90,15 +95,46 @@ func NewService(ctx context.Context, sources *viper.Viper, destinationsService *
 	return service, nil
 }
 
-func (s *Service) init(sc map[string]drivers.SourceConfig) {
-	for name, sourceConfig := range sc {
+func (s *Service) loadSources(sourcesProvider string) error {
+	// Parse config as string
+	reloadSec := viper.GetInt("server.sources_reload_sec")
+	//var sourcesProvider string
+	//err = sources.Unmarshal(sourcesProvider)
+	//if err != nil {
+	//	return err
+	//}
+	if strings.HasPrefix(sourcesProvider, "http://") || strings.HasPrefix(sourcesProvider, "https://") {
+		resources.Watch(serviceName, sourcesProvider, resources.LoadFromHttp, s.updateSources, time.Duration(reloadSec)*time.Second)
+	} else if strings.HasPrefix(sourcesProvider, "file://") {
+		resources.Watch(serviceName, strings.Replace(sourcesProvider, "file://", "", 1), resources.LoadFromFile, s.updateSources, time.Duration(reloadSec)*time.Second)
+	} else if strings.HasPrefix(sourcesProvider, "{") && strings.HasSuffix(sourcesProvider, "}") {
+		sourcesConfig, err := parseFromBytes([]byte(sourcesProvider))
+		if err != nil {
+			return err
+		}
+		s.initDrivers(sourcesConfig)
+	} else {
+		return fmt.Errorf(unknownSourceConfigurationFormat)
+	}
+	return nil
+}
 
+func (s *Service) updateSources(payload []byte) {
+	sourceConfigs, err := parseFromBytes(payload)
+	if err != nil {
+		logging.Errorf("Error updating sources: %v", err)
+	} else {
+		s.initDrivers(sourceConfigs)
+	}
+}
+
+func (s *Service) initDrivers(sourceConfigs map[string]drivers.SourceConfig) {
+	for name, sourceConfig := range sourceConfigs {
 		driverPerCollection, err := drivers.Create(s.ctx, name, &sourceConfig)
 		if err != nil {
 			logging.Errorf("[%s] Error initializing source of type %s: %v", name, sourceConfig.Type, err)
 			continue
 		}
-
 		s.Lock()
 		s.sources[name] = &Unit{
 			DriverPerCollection: driverPerCollection,
@@ -107,7 +143,6 @@ func (s *Service) init(sc map[string]drivers.SourceConfig) {
 		s.Unlock()
 
 		logging.Infof("[%s] source has been initialized!", name)
-
 	}
 }
 
